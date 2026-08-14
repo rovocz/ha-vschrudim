@@ -1,0 +1,66 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "VS Chrudim - přihlášení",
+        "description": "Použij stejné přihlašovací údaje jako pro zákaznický portál VS Chrudim.",
+        "data": {
+          "username": "E-mail",
+          "password": "Heslo"
+        },
+        "data_description": {
+          "username": "E-mailová adresa používaná pro přihlášení do zákaznického portálu.",
+          "password": "Heslo k zákaznickému portálu VS Chrudim."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Je potřeba znovu se přihlásit",
+        "description": "Přihlášení k účtu VS Chrudim už není platné. Zadej znovu své heslo.",
+        "data": {
+          "password": "Heslo"
+        },
+        "data_description": {
+          "password": "Heslo k zákaznickému portálu VS Chrudim."
+        }
+      },
+      "reconfigure": {
+        "title": "Změna účtu VS Chrudim",
+        "description": "Zadej přihlašovací údaje účtu, který chceš pro tuto integraci používat.",
+        "data": {
+          "username": "E-mail",
+          "password": "Heslo"
+        },
+        "data_description": {
+          "username": "E-mailová adresa používaná pro přihlášení.",
+          "password": "Heslo k zákaznickému portálu VS Chrudim."
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Server odmítl přihlašovací údaje (špatný e-mail nebo heslo).",
+      "cannot_connect": "Nepodařilo se spojit se serverem zakaznik.vschrudim.cz.",
+      "no_active_places": "K tomuto účtu nebylo nalezeno žádné aktivní odběrné místo.",
+      "unknown": "Nastala neočekávaná chyba - podrobnosti najdeš v logu Home Assistant."
+    },
+    "abort": {
+      "already_configured": "Tento účet je už nastavený.",
+      "reauth_successful": "Přihlášení bylo obnoveno.",
+      "reconfigure_successful": "Účet byl změněn.",
+      "options_updated": "Nastavení bylo uloženo."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "VS Chrudim - nastavení",
+        "description": "Nastav, jak často má integrace kontrolovat nové údaje.",
+        "data": {
+          "scan_interval_hours": "Jak často stahovat data (hodiny)"
+        },
+        "data_description": {
+          "scan_interval_hours": "Kontrola portálu proběhne nejvýše jednou za tento počet hodin."
+        }
+      }
+    }
+  }
+}

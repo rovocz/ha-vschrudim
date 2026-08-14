@@ -1,0 +1,66 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "VS Chrudim - login",
+        "description": "Enter the same credentials you use for the VS Chrudim customer portal.",
+        "data": {
+          "username": "E-mail",
+          "password": "Password"
+        },
+        "data_description": {
+          "username": "E-mail address used to sign in to the customer portal.",
+          "password": "Password for the VS Chrudim customer portal."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authentication required",
+        "description": "The VS Chrudim account authentication is no longer valid. Enter your password again.",
+        "data": {
+          "password": "Password"
+        },
+        "data_description": {
+          "password": "Password for the VS Chrudim customer portal."
+        }
+      },
+      "reconfigure": {
+        "title": "Change VS Chrudim account",
+        "description": "Enter the credentials for the account you want this integration to use.",
+        "data": {
+          "username": "E-mail",
+          "password": "Password"
+        },
+        "data_description": {
+          "username": "E-mail address used to sign in.",
+          "password": "Password for the VS Chrudim customer portal."
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "The server rejected the credentials (wrong e-mail or password).",
+      "cannot_connect": "Could not connect to zakaznik.vschrudim.cz.",
+      "no_active_places": "No active consumption place was found for this account.",
+      "unknown": "An unexpected error occurred - check the Home Assistant log for details."
+    },
+    "abort": {
+      "already_configured": "This account is already configured.",
+      "reauth_successful": "Authentication was restored.",
+      "reconfigure_successful": "The account was changed.",
+      "options_updated": "Settings were saved."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "VS Chrudim - options",
+        "description": "Choose how often the integration checks for new readings.",
+        "data": {
+          "scan_interval_hours": "How often to fetch data (hours)"
+        },
+        "data_description": {
+          "scan_interval_hours": "The portal will be checked at most once per this many hours."
+        }
+      }
+    }
+  }
+}
