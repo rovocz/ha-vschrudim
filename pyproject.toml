@@ -7,6 +7,7 @@ name = "ha-vschrudim"
 version = "0.4.0"
 description = "Home Assistant integration for Vodárenská společnost Chrudim"
 requires-python = ">=3.9"
+dependencies = ["beautifulsoup4>=4.12.0"]
 
 [tool.setuptools]
 packages = []
