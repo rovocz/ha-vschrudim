@@ -33,11 +33,11 @@ The integration logs in to the VS Chrudim customer portal, discovers all active 
 
 ![VS Chrudim – Add integration](README_assets/screenshot1.png)
 
-### Integration configuration
+### Water consumption data in Home Assistant
 
 ![VS Chrudim – Configuration](README_assets/screenshot2.png)
 
-### Water-meter data in Home Assistant
+### Water consumption data in Home Assistant
 
 ![VS Chrudim – Water meter](README_assets/screenshot3.png)
 
@@ -115,6 +115,22 @@ Imported historical data uses a separate Home Assistant statistic ID:
 The built-in Home Assistant statistics graphs can use this history directly.
 
 Cards that rely on normal entity history may only display the period during which the entity itself existed.
+
+### Statistic graph example
+
+`<YAML>
+type: statistics-graph
+grid_options:
+  columns: 24
+  rows: 3
+entities:
+  - vschrudim:604202_7530
+days_to_show: 3
+period: hour
+chart_type: bar-stack
+stat_types:
+  - change`
+
 
 ## Polling
 
