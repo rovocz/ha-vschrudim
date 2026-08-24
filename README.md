@@ -118,18 +118,18 @@ Cards that rely on normal entity history may only display the period during whic
 
 ### Statistic graph example
 
-`<YAML>
-type: statistics-graph
-grid_options:
-  columns: 24
-  rows: 3
-entities:
-  - vschrudim:604202_7530
-days_to_show: 3
-period: hour
-chart_type: bar-stack
-stat_types:
-  - change`
+    <YAML>
+    type: statistics-graph
+    grid_options:
+      columns: 24
+      rows: 3
+    entities:
+      - vschrudim:604202_7530
+    days_to_show: 3
+    period: hour
+    chart_type: bar-stack
+    stat_types:
+      - change
 
 
 ## Polling
