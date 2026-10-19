@@ -62,5 +62,17 @@
         }
       }
     }
+  },
+  "services": {
+    "reset_history": {
+      "name": "Reset water meter history",
+      "description": "Clears all previously imported long-term statistics for this VS Chrudim account and re-imports them from scratch on the next update.",
+      "fields": {
+        "entity_id": {
+          "name": "Water meter entity",
+          "description": "Optional - limits the reset to the account this entity belongs to. Leave empty to reset everything."
+        }
+      }
+    }
   }
 }

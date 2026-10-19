@@ -62,5 +62,17 @@
         }
       }
     }
+  },
+  "services": {
+    "reset_history": {
+      "name": "Reset historie vodoměru",
+      "description": "Smaže veškerou dosud dovezenou historii (dlouhodobé statistiky) pro tento účet VS Chrudim a při nejbližší aktualizaci ji naimportuje znovu od začátku.",
+      "fields": {
+        "entity_id": {
+          "name": "Entita vodoměru",
+          "description": "Nepovinné - omezí reset jen na účet, kterému tahle entita patří. Ponech prázdné, chceš-li resetovat úplně vše."
+        }
+      }
+    }
   }
 }

@@ -374,6 +374,78 @@ class VSChrudimClient:
         return r.text, r.url
 
     # ------------------------------------------------------------
+    # FILTR "POSLEDNÍ TÝDEN / MĚSÍC / ROK" (edGraphLength)
+    #
+    # ProfileData.aspx má nahoře filtr, který určuje, jak dlouhé
+    # období export CSV pokrývá - server default je "M" (poslední
+    # měsíc). Přepnutím na "Y" (poslední rok) se stažené CSV
+    # rozšíří na celou dostupnou historii (ověřeno: 1345 řádků
+    # od data instalace vodoměru místo 746 za poslední měsíc).
+    #
+    # Ověřeno jako normální (ne-AJAX) postback - stejný princip
+    # jako "Naměřené stavy" v open_profile_data().
+    # ------------------------------------------------------------
+
+    def _select_graph_length(
+        self, profile_html: str, profile_url: str, length_code: str = "Y"
+    ) -> tuple[str, str]:
+        soup = BeautifulSoup(profile_html, "html.parser")
+
+        select_length = soup.find(
+            "select", id=re.compile(r"edGraphLength$")
+        )
+
+        if select_length is None:
+            # Filtr nenalezen - nejde o fatální chybu, prostě
+            # zůstaneme na serverovém defaultu (poslední měsíc).
+            return profile_html, profile_url
+
+        length_name = select_length.get("name")
+
+        if not length_name:
+            return profile_html, profile_url
+
+        extra_fields = {length_name: length_code}
+
+        # Druhý select (odběrné místo v grafu) musí jít v POSTu
+        # taky, se svou AKTUÁLNÍ hodnotou - jinak by se "vynuloval".
+        select_point = soup.find(
+            "select", id=re.compile(r"edMeteringPoint$")
+        )
+
+        if select_point is not None:
+            point_name = select_point.get("name")
+            current_option = select_point.find("option", selected=True)
+
+            if point_name and current_option is not None:
+                extra_fields[point_name] = current_option.get("value", "")
+
+        post_data = self._hidden_fields(profile_html)
+        post_data.update(extra_fields)
+        post_data["__EVENTTARGET"] = length_name
+        post_data["__EVENTARGUMENT"] = ""
+
+        r = self.s.post(
+            profile_url,
+            data=post_data,
+            headers={
+                "Content-Type":
+                    "application/x-www-form-urlencoded; charset=utf-8",
+                "Origin": self.base_url,
+                "Referer": profile_url,
+            },
+            allow_redirects=True,
+            timeout=REQUEST_TIMEOUT,
+        )
+
+        if "DocumentShow.aspx" not in r.text:
+            # Nevyšlo - raději pokračujeme s původní stránkou
+            # (měsíční export) než abychom celé stažení shodili.
+            return profile_html, profile_url
+
+        return r.text, r.url
+
+    # ------------------------------------------------------------
     # HLEDÁNÍ EXPORT ODKAZU (DATA_ID SE MĚNÍ PŘI KAŽDÉM NAČTENÍ!)
     # ------------------------------------------------------------
 
@@ -482,7 +554,17 @@ class VSChrudimClient:
     # každé vrátí poslední (nejnovější) odečet.
     # ------------------------------------------------------------
 
-    def get_latest_readings(self) -> dict[str, dict]:
+    def get_latest_readings(
+        self, graph_length: str = "M"
+    ) -> dict[str, dict]:
+        """Přihlásí se a stáhne aktuální data pro všechna aktivní místa.
+
+        graph_length: "W"/"M"/"Y" - jaký rozsah CSV požádat od
+        serveru (viz _select_graph_length). Výchozí "M" (poslední
+        měsíc) je levné a pro běžný pravidelný poll bohatě stačí -
+        "Y" (poslední rok) se má žádat jen při prvotním naplnění
+        historie nebo po resetu, ne při každém běžném pollu.
+        """
         self.login()
 
         places = self.list_consumption_places()
@@ -500,6 +582,15 @@ class VSChrudimClient:
             self.select_consumption_place(place["index"])
 
             profile_html, profile_url = self.open_profile_data()
+
+            # "M" (poslední měsíc) je serverový výchozí stav rovnou
+            # po otevření ProfileData.aspx (ověřeno) - přepínat
+            # filtr má smysl jen pro "W"/"Y", ať si nepřidáváme
+            # zbytečný request navíc při každém běžném pollu.
+            if graph_length != "M":
+                profile_html, profile_url = self._select_graph_length(
+                    profile_html, profile_url, graph_length
+                )
 
             href = self._find_csv_export_href(profile_html)
             if not href:

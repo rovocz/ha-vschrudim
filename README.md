@@ -100,6 +100,8 @@ The VS Chrudim portal can sometimes make many hourly readings available at once.
 
 During every successful poll, the integration downloads the available CSV data and compares its timestamps with the historical statistics already imported for each consumption place.
 
+The `ProfileData.aspx` page has a "last week / last month / last year" filter that controls how far back the CSV export goes (the portal's own default is the last month). The integration requests "last year" only for the very first import (or right after `vschrudim.reset_history`) so the full available history is picked up; every regular poll afterwards uses the cheaper default "last month" range, which is already enough to catch up on any new hourly readings.
+
 For example, if the portal suddenly provides 24 new hourly readings, the integration imports all 24 readings with their original timestamps.
 
 This allows Home Assistant to retain the actual hourly consumption curve even when the portal was contacted only once during that period.
@@ -115,6 +117,16 @@ Imported historical data uses a separate Home Assistant statistic ID:
 The built-in Home Assistant statistics graphs can use this history directly.
 
 Cards that rely on normal entity history may only display the period during which the entity itself existed.
+
+The very first imported data point is intentionally skipped: it has no previous value to compare against, so Home Assistant would otherwise compute its "change" as the full reading itself, producing a misleading spike at the start of any `change`-type graph.
+
+### Resetting history
+
+If the imported history ever needs to be cleared and re-imported from scratch (for example after inconsistent data caused by a manual edit in **Developer Tools → Statistics**), use the built-in action instead of editing the recorder database by hand:
+
+**Developer Tools → Actions → "VS Chrudim: Reset water meter history"** (`vschrudim.reset_history`)
+
+Optionally target a specific water-meter entity to reset only that consumption place; without a target, history is reset for every configured VS Chrudim account. The statistic ID itself does not change, so no dashboard cards need to be updated afterwards.
 
 ### Statistic graph example
 
