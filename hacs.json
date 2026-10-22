@@ -1,4 +1,7 @@
 {
   "name": "VS Chrudim (vodoměr)",
+  "country": ["CZ"],
+  "content_in_root": false,
   "render_readme": true
+  
 }
