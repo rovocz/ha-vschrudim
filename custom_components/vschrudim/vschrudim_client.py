@@ -22,6 +22,14 @@ import requests
 from bs4 import BeautifulSoup
 
 from .const import DEFAULT_BASE_URL
+from .profile_navigation import (
+    context_status,
+    form_payload,
+    login_page,
+    navigation_candidate,
+    profile_ready,
+    safe_url,
+)
 
 REQUEST_TIMEOUT = 30
 
@@ -48,6 +56,10 @@ class VSChrudimClient:
         self.username = username
         self.password = password
         self.base_url = base_url
+        self._places_by_index: dict[int, dict] = {}
+        self._selected_place: dict | None = None
+        self._selected_response = None
+        self._context_verified = False
 
         self.s = requests.Session()
         self.s.headers.update(
@@ -73,6 +85,47 @@ class VSChrudimClient:
             if name:
                 result[name] = tag.get("value", "")
         return result
+
+    def _checked_response(self, response):
+        """Ověřit HTTP, původ a rozpoznat vypršení session bez výpisu obsahu."""
+        response.raise_for_status()
+        try:
+            safe_url(self.base_url, self.base_url, response.url)
+        except ValueError as err:
+            raise VSChrudimError("Portál přesměroval na nepovolený server.") from err
+        if login_page(response.text, response.url):
+            raise VSChrudimAuthError("Přihlášená relace portálu vypršela.")
+        return response
+
+    def _safe_request(self, method: str, url: str, **kwargs):
+        """Před každým přesměrováním ověřit stejný portál a omezit jejich počet.
+
+        POST po běžném 301/302/303 přechází na GET jako v requests. Při 307/308
+        zůstane metoda i tělo; obě se odešlou jen původnímu serveru. Při chybě
+        se nezaznamenává URL s tokeny ani tělo formuláře.
+        """
+        try:
+            current = safe_url(self.base_url, self.base_url + "/", url)
+            for _ in range(6):
+                response = getattr(self.s, method.lower())(
+                    current, allow_redirects=False, **kwargs
+                )
+                response.raise_for_status()
+                safe_url(self.base_url, current, response.url)
+                if response.status_code not in (301, 302, 303, 307, 308):
+                    return self._checked_response(response)
+                location = response.headers.get("Location")
+                if not location:
+                    raise VSChrudimError("Přesměrování portálu nemá cíl.")
+                current = safe_url(self.base_url, response.url, location)
+                if response.status_code == 303 or (
+                    response.status_code in (301, 302) and method.upper() == "POST"
+                ):
+                    method = "GET"
+                    kwargs.pop("data", None)
+            raise VSChrudimError("Portál překročil limit přesměrování.")
+        except ValueError as err:
+            raise VSChrudimError("Portál přesměroval na nepovolený server.") from err
 
     # ------------------------------------------------------------
     # LOGIN
@@ -124,6 +177,7 @@ class VSChrudimClient:
             allow_redirects=False,
             timeout=REQUEST_TIMEOUT,
         )
+        r.raise_for_status()
 
         # Server nám u špatných údajů natvrdo řekne "Login is not
         # valid" - to je jistější signál než cokoliv jiného.
@@ -134,12 +188,11 @@ class VSChrudimClient:
             )
 
         test_url = self.base_url + "/ConsumptionPlaceList.aspx"
-        test = self.s.get(test_url, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+        test = self._safe_request("GET", test_url, timeout=REQUEST_TIMEOUT)
 
         if "gvConsumptionPlaces" not in test.text:
-            raise VSChrudimAuthError(
-                "Přihlášení se nepodařilo ověřit - server "
-                "nezpřístupnil stránku s odběrnými místy."
+            raise VSChrudimError(
+                "Server nezpřístupnil ověřitelný seznam odběrných míst."
             )
 
     # ------------------------------------------------------------
@@ -151,10 +204,13 @@ class VSChrudimClient:
     # ------------------------------------------------------------
 
     def list_consumption_places(self) -> list[dict]:
+        self._places_by_index = {}
+        self._selected_place = None
+        self._selected_response = None
+        self._context_verified = False
         url = self.base_url + "/ConsumptionPlaceList.aspx"
 
-        r = self.s.get(url, allow_redirects=True, timeout=REQUEST_TIMEOUT)
-        r.raise_for_status()
+        r = self._safe_request("GET", url, timeout=REQUEST_TIMEOUT)
 
         soup = BeautifulSoup(r.text, "html.parser")
 
@@ -199,6 +255,7 @@ class VSChrudimClient:
             )
             idx += 1
 
+        self._places_by_index = {place["index"]: place for place in places}
         return places
 
     # ------------------------------------------------------------
@@ -206,10 +263,16 @@ class VSChrudimClient:
     # ------------------------------------------------------------
 
     def select_consumption_place(self, idx: int) -> None:
+        # Zvolený index musí stále označovat stejné místo ve čerstvém gridu.
+        expected = self._places_by_index.get(idx)
+        self._selected_place = None
+        self._selected_response = None
+        self._context_verified = False
+        if expected is None:
+            raise VSChrudimError("Odběrné místo není ověřeno v aktuálním seznamu.")
         url = self.base_url + "/ConsumptionPlaceList.aspx"
 
-        r0 = self.s.get(url, allow_redirects=True, timeout=REQUEST_TIMEOUT)
-        r0.raise_for_status()
+        r0 = self._safe_request("GET", url, timeout=REQUEST_TIMEOUT)
         html = r0.text
 
         if "gvConsumptionPlaces" not in html:
@@ -218,7 +281,32 @@ class VSChrudimClient:
                 "gvConsumptionPlaces - session zřejmě vypadla."
             )
 
-        data = self._hidden_fields(html)
+        soup = BeautifulSoup(html, "html.parser")
+        table = soup.find("table", id=re.compile(r"gvConsumptionPlaces$"))
+        rows = []
+        if table:
+            for row in table.find_all("tr"):
+                cells = row.find_all("td")
+                if not row.find("th") and len(cells) >= 6:
+                    rows.append(cells)
+        def normalize(value: str) -> str:
+            return "".join(value.split()).casefold()
+
+        if idx >= len(rows) or any(
+            normalize(rows[idx][position].get_text(strip=True))
+            != normalize(expected[key])
+            for position, key in ((1, "evidencni_cislo"), (2, "technicke_cislo"))
+        ):
+            raise VSChrudimError("Pořadí nebo identita odběrného místa se změnila.")
+
+        form = table.find_parent("form")
+        if form is None:
+            raise VSChrudimError("Seznam míst nemá platný formulář.")
+        try:
+            destination = safe_url(self.base_url, r0.url, form.get("action") or r0.url)
+        except ValueError as err:
+            raise VSChrudimError("Nepovolená adresa formuláře míst.") from err
+        fields = form_payload(form)
 
         event_target = (
             "ctl00$ctl00$ContentPlaceHolder1Common$"
@@ -227,22 +315,27 @@ class VSChrudimClient:
         event_argument = f"Show${idx}"
         toolkit_target = "ctl00$ctl00$FormPanel|" + event_target
 
-        data.update(
-            {
-                "__EVENTTARGET": event_target,
-                "__EVENTARGUMENT": event_argument,
-                "ctl00$ctl00$captchaToken": "",
-                "ctl00$ctl00$crs": "",
-                "ctl00$ctl00$ContentPlaceHolder1Common"
-                "$ContentPlaceHolder1$PageName":
-                    "ConsumptionPlaceList.aspx",
-                "__ASYNCPOST": "true",
-                "ctl00$ctl00$ToolkitScriptManager1": toolkit_target,
-            }
+        overrides = {
+            "__EVENTTARGET": event_target,
+            "__EVENTARGUMENT": event_argument,
+            "__ASYNCPOST": "true",
+            "ctl00$ctl00$ToolkitScriptManager1": toolkit_target,
+        }
+        defaults = {
+            "ctl00$ctl00$captchaToken": "",
+            "ctl00$ctl00$crs": "",
+            "ctl00$ctl00$ContentPlaceHolder1Common$ContentPlaceHolder1$PageName":
+                "ConsumptionPlaceList.aspx",
+        }
+        present = {key for key, _ in fields}
+        data = [(key, value) for key, value in fields if key not in overrides]
+        data.extend(
+            (key, value) for key, value in defaults.items() if key not in present
         )
+        data.extend(overrides.items())
 
         r = self.s.post(
-            url,
+            destination,
             data=data,
             headers={
                 "X-Requested-With": "XMLHttpRequest",
@@ -257,6 +350,7 @@ class VSChrudimClient:
             allow_redirects=False,
             timeout=REQUEST_TIMEOUT,
         )
+        self._checked_response(r)
 
         redirect_url = None
 
@@ -270,27 +364,25 @@ class VSChrudimClient:
                 redirect_url = None
 
         if redirect_url:
-            full_url = (
-                self.base_url + redirect_url
-                if redirect_url.startswith("/")
-                else self.base_url + "/" + redirect_url
+            try:
+                full_url = safe_url(self.base_url, r.url, redirect_url)
+            except ValueError as err:
+                raise VSChrudimError("Nepovolené přesměrování výběru místa.") from err
+            main = self._safe_request("GET", full_url, timeout=REQUEST_TIMEOUT)
+        else:
+            # Známá stránka použitá stávajícím klientem; kontext se ověřuje níže.
+            main = self._safe_request(
+                "GET",
+                self.base_url + "/UserData/MainInfo.aspx",
+                timeout=REQUEST_TIMEOUT,
             )
-            main = self.s.get(full_url, allow_redirects=True, timeout=REQUEST_TIMEOUT)
-
-            if main.status_code == 200 and "MainInfo.aspx" in main.url:
-                return
-
-        # Fallback - zkusíme MainInfo přímo.
-        main = self.s.get(
-            self.base_url + "/UserData/MainInfo.aspx",
-            allow_redirects=True,
-            timeout=REQUEST_TIMEOUT,
-        )
-
-        if "MainInfo.aspx" not in main.url:
-            raise VSChrudimError(
-                f"Výběr odběrného místa (index {idx}) se nepodařil."
-            )
+        self._checked_response(main)
+        status = context_status(main.text, expected)
+        if status is False:
+            raise VSChrudimError("Portál potvrdil jiné odběrné místo.")
+        self._selected_place = expected
+        self._selected_response = main
+        self._context_verified = status is True
 
     # ------------------------------------------------------------
     # KROK 3: "NAMĚŘENÉ STAVY" (MainInfo.aspx -> ProfileData.aspx)
@@ -301,57 +393,75 @@ class VSChrudimClient:
     # ------------------------------------------------------------
 
     def open_profile_data(self) -> tuple[str, str]:
-        main_url = self.base_url + "/UserData/MainInfo.aspx"
+        """Otevřít profil z čerstvě vybraného a ověřeného kontextu místa."""
+        if self._selected_place is None or self._selected_response is None:
+            raise VSChrudimError("Před otevřením odečtů nebylo vybráno místo.")
+        r0 = self._checked_response(self._selected_response)
 
-        r0 = self.s.get(main_url, allow_redirects=True, timeout=REQUEST_TIMEOUT)
-        r0.raise_for_status()
-        html = r0.text
+        def finish(response, *, require_filter: bool):
+            self._checked_response(response)
+            status = context_status(response.text, self._selected_place)
+            if status is False:
+                raise VSChrudimError("Stránka odečtů patří jinému místu.")
+            if status is True:
+                self._context_verified = True
+            if not self._context_verified:
+                raise VSChrudimError("Portál nepotvrdil identitu vybraného místa.")
+            if not profile_ready(response.text, require_filter=require_filter):
+                raise VSChrudimError(
+                    "Stránka odečtů nemá ověřitelný export nebo filtr."
+                )
+            return response.text, response.url
 
-        soup = BeautifulSoup(html, "html.parser")
-        link = soup.find(
-            "a", id=re.compile(r"MainMenu1_btnProfileData$")
-        )
+        # Server může po volbě místa už vrátit finální stránku.
+        if profile_ready(r0.text, require_filter=True):
+            return finish(r0, require_filter=True)
 
-        if link is None:
-            raise VSChrudimError(
-                "Na MainInfo.aspx se nepodařilo najít odkaz "
-                "'Naměřené stavy' - web nejspíš změnil strukturu."
+        candidate = navigation_candidate(r0.text)
+        if candidate is None:
+            # Přímá známá cesta je přípustná jen po potvrzení aktuálního místa.
+            if not self._context_verified:
+                raise VSChrudimError("Odkaz odečtů ani kontext místa nejsou dostupné.")
+            target = safe_url(self.base_url, r0.url, "/UserData/ProfileData.aspx")
+            r = self._safe_request("GET", target, timeout=REQUEST_TIMEOUT)
+            return finish(r, require_filter=True)
+
+        mode, node, target, argument = candidate
+        if mode == "link":
+            try:
+                destination = safe_url(self.base_url, r0.url, target)
+            except ValueError as err:
+                raise VSChrudimError("Nepovolený odkaz odečtů.") from err
+            r = self._safe_request("GET", destination, timeout=REQUEST_TIMEOUT)
+        else:
+            form = node.find_parent("form")
+            if form is None:
+                raise VSChrudimError("Ovládání odečtů nemá platný formulář.")
+            try:
+                destination = safe_url(
+                    self.base_url, r0.url, form.get("action") or r0.url
+                )
+            except ValueError as err:
+                raise VSChrudimError("Nepovolená adresa formuláře.") from err
+            payload = [
+                (key, value)
+                for key, value in form_payload(form)
+                if key not in ("__EVENTTARGET", "__EVENTARGUMENT")
+            ]
+            if mode == "postback":
+                payload.extend(
+                    (("__EVENTTARGET", target), ("__EVENTARGUMENT", argument))
+                )
+            else:
+                payload.extend(
+                    (("__EVENTTARGET", ""), ("__EVENTARGUMENT", ""), (target, argument))
+                )
+            r = self._safe_request(
+                "POST", destination, data=payload,
+                headers={"Origin": self.base_url, "Referer": r0.url},
+                timeout=REQUEST_TIMEOUT,
             )
-
-        href = link.get("href", "")
-        m = re.search(
-            r"__doPostBack\('([^']*)'\s*,\s*'([^']*)'\)", href
-        )
-
-        if not m:
-            raise VSChrudimError(
-                f"Odkaz na Naměřené stavy má neočekávaný formát: "
-                f"{href!r}"
-            )
-
-        event_target, event_argument = m.group(1), m.group(2)
-
-        post_data = self._hidden_fields(html)
-        post_data.update(
-            {
-                "__EVENTTARGET": event_target,
-                "__EVENTARGUMENT": event_argument,
-            }
-        )
-
-        r = self.s.post(
-            main_url,
-            data=post_data,
-            headers={
-                "Content-Type":
-                    "application/x-www-form-urlencoded; "
-                    "charset=utf-8",
-                "Origin": self.base_url,
-                "Referer": main_url,
-            },
-            allow_redirects=True,
-            timeout=REQUEST_TIMEOUT,
-        )
+        self._checked_response(r)
 
         if r.text.startswith("1|#|") and "pageRedirect" in r.text:
             parts = r.text.split("|")
@@ -362,16 +472,13 @@ class VSChrudimClient:
                 redirect_url = None
 
             if redirect_url:
-                full_url = urljoin(r.url, redirect_url)
-                r = self.s.get(full_url, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+                try:
+                    full_url = safe_url(self.base_url, r.url, redirect_url)
+                except ValueError as err:
+                    raise VSChrudimError("Nepovolené přesměrování odečtů.") from err
+                r = self._safe_request("GET", full_url, timeout=REQUEST_TIMEOUT)
 
-        if "DocumentShow.aspx" not in r.text:
-            raise VSChrudimError(
-                "Po kliknutí na 'Naměřené stavy' nevidím odkaz "
-                "na export CSV."
-            )
-
-        return r.text, r.url
+        return finish(r, require_filter=False)
 
     # ------------------------------------------------------------
     # FILTR "POSLEDNÍ TÝDEN / MĚSÍC / ROK" (edGraphLength)
@@ -466,6 +573,7 @@ class VSChrudimClient:
     # ------------------------------------------------------------
     # STAŽENÍ CSV (jako text, ne do souboru)
     # ------------------------------------------------------------
+
 
     def _download_csv_text(self, href: str, profile_url: str) -> str:
         csv_url = urljoin(profile_url, href)
@@ -633,4 +741,8 @@ class VSChrudimClient:
                 "rows": rows,
             }
 
+        # Původní koordinátor by jinak prázdný výsledek označil za úspěšné
+        # doplnění historie. Místa s platnými odečty zachovávají původní tok.
+        if not result:
+            raise VSChrudimError("Portál nevrátil použitelné odečty žádného místa.")
         return result
